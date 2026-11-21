@@ -360,9 +360,9 @@ test("a Skill tool brings the slash-skill guidance into the third block", async 
   expect(b.system).toEqual(zcodeSystem("zai-api/GLM-5.3-Flash", undefined, ["You are opencode, an agent.", "Project instructions."]).map((x, i) => (i === 2 ? { ...x, text: dyn } : x)))
 })
 
-test("a BigModel sign-in's Start Plan names bigmodel-api; a string turn takes the cache mark", async () => {
+test.each(["bigmodel", "zai_cn"])("a %s sign-in's Start Plan names bigmodel-api; a string turn takes the cache mark", async (site) => {
   const body = { model: "GLM-5.2", max_tokens: 100, system: "  Be brief.  ", messages: [{ role: "user", content: "hello" }] }
-  const r = await send(start("bigmodel"), JSON.stringify(body), { url: "https://open.bigmodel.cn/api/anthropic/v1/messages" })
+  const r = await send(start(site), JSON.stringify(body), { url: "https://open.bigmodel.cn/api/anthropic/v1/messages" })
   expect(r.path).toBe("/zcode.z.ai/api/v1/zcode-plan/anthropic/v1/messages")
   expect(JSON.parse(r.body)).toEqual({
     model: "GLM-5.2",

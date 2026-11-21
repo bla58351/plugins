@@ -1,6 +1,7 @@
 # @magpie-community/opencode-zcode-auth
 
-Signs in to Z.ai's GLM Coding Plan, or BigModel's (智谱). It does this the
+Signs in to Z.ai's GLM Coding Plan, a Z.ai CN one (zchat.z.ai), or
+BigModel's (智谱). It does this the
 way [ZCode](https://zcode.z.ai) does, and serves the plan's GLM models
 over Anthropic's Messages API. Provider id: `zcode`.
 
@@ -59,10 +60,24 @@ over Anthropic's Messages API. Provider id: `zcode`.
     when it is a UUID, else as a UUID made from it, so the vendor sees
     only ZCode's format; with none, a UUID made from the device. The same
     id is `metadata.user_id`'s `session_id`, as in ZCode's requests.
+- **ZCode: ZChat (zchat.z.ai) GLM Coding Plan**
+  - The same flow, finished in the browser at **zchat.z.ai** — the China
+    site of Z.ai, which ZCode's own app signs in to as the provider
+    `zai_cn` ("Z.ai (CN)"; magpie lists it among the ways below its two
+    site buttons, under this name). Its accounts are Z.ai CN's own: an
+    account made on z.ai (the international site) can't sign in here, and
+    the other way round, as the two sites' accounts are kept apart.
+  - A Z.ai CN account's plan is a BigModel one: ZCode serves it by
+    BigModel's business API, the sign-in's token is used as a BigModel
+    token (bare, and no exchange), the key comes from the account's
+    default project at `bigmodel.cn`, and requests go to
+    `open.bigmodel.cn/api/anthropic`. The Start Plan works as it does for
+    the other sign-ins.
 - **ZCode: a team's GLM Coding Plan**
   - For an account with a plan of its own and a seat on a team's plan
     (#285). The sign-ins above take the account's own plan, as ZCode does
-    by default; this one asks which site, signs in the same way, and
+    by default; this one asks which site (Z.ai, BigModel or Z.ai CN),
+    signs in the same way, and
     takes the team seat's `zcode-team-api-key`, as ZCode does when its
     plan picker is switched to the team's plan.
   - It is kept as an account of its own, named `<email> (team)`, beside

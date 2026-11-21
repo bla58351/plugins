@@ -1,11 +1,14 @@
 // ZCode's GLM Coding Plan, as an OpenCode provider plugin.
 //
-// ZCode (zcode.z.ai) signs in to a Z.ai account, or a BigModel (智谱,
-// bigmodel.cn) one, through a flow zcode.z.ai opens and is polled for. With
-// the account's sign-in it finds or makes the coding plan key it uses (the
-// key named zcode-api-key in the account's default project) and sends the
-// models' requests, Anthropic's Messages, to the plan's endpoint:
-// api.z.ai/api/anthropic or open.bigmodel.cn/api/anthropic.
+// ZCode (zcode.z.ai) signs in to a Z.ai account, a Z.ai CN one (zchat.z.ai,
+// the provider it names zai_cn), or a BigModel (智谱, bigmodel.cn) one,
+// through a flow zcode.z.ai opens and is polled for. With the account's
+// sign-in it finds or makes the coding plan key it uses (the key named
+// zcode-api-key in the account's default project) and sends the models'
+// requests, Anthropic's Messages, to the plan's endpoint:
+// api.z.ai/api/anthropic or open.bigmodel.cn/api/anthropic. A Z.ai CN
+// account's plan is a BigModel one — its sign-in's token goes bare as a
+// BigModel token does, and the plan is served by BigModel's API.
 //
 // An account with no plan of its own may have a seat on a team's plan (a
 // project of type 2, and its zcode-team-api-key), or ZCode's free Start
@@ -50,8 +53,22 @@ const START_MODELS = MODELS.filter((m) => m.id !== "GLM-5.3")
 const SITES = {
   zai: { name: "Z.ai", api: ZAI_API, base: ZAI_BASE, subscribe: "z.ai/subscribe" },
   bigmodel: { name: "BigModel", api: BIGMODEL_API, base: BIGMODEL_BASE, subscribe: "bigmodel.cn/glm-coding" },
+  // zai_cn is a zchat.z.ai account (ZCode's "Z.ai (CN)" sign-in, which the
+  // browser finishes at zchat.z.ai). ZCode serves it by BigModel: the plan,
+  // the key and the requests are BigModel's, and the sign-in's token is the
+  // business token itself, bare as a BigModel one. Its way is named ZChat,
+  // after the site, and never "Z.ai …": magpie's site page (its two buttons
+  // are Z.ai and BigModel) lists a sign-in among the ways below the buttons
+  // unless the way's label holds a site's name, so a Z.ai CN way named
+  // "Z.ai CN" would be listed nowhere.
+  zai_cn: { name: "Z.ai CN", api: BIGMODEL_API, base: BIGMODEL_BASE, subscribe: "bigmodel.cn/glm-coding" },
 }
-const siteOf = (s) => (s === "bigmodel" ? "bigmodel" : "zai")
+const siteOf = (s) => (s === "bigmodel" || s === "zai_cn" ? s : "zai")
+// wayLabel is a site's sign-in way as magpie lists it: the site's own two
+// say their site's name, which magpie's site page takes for the site
+// buttons; Z.ai CN's is named after its site instead (see SITES.zai_cn)
+const wayLabel = (site) =>
+  site === "zai_cn" ? "ZCode: ZChat (zchat.z.ai) GLM Coding Plan" : `ZCode: ${SITES[site].name}${site === "bigmodel" ? " (智谱)" : ""} GLM Coding Plan`
 
 const platform = () => `${process.platform}-${process.arch}` // darwin-arm64, win32-x64, linux-x64, as ZCode names them
 const uuid = () => crypto.randomUUID()
@@ -1344,9 +1361,10 @@ async function resetsOf(url, auth, headers) {
 // ---- signing in ------------------------------------------------------------------
 
 // bizAuth is the Authorization a sign-in gives the business API: Z.ai's
-// token exchanged for a business one, as a Bearer; BigModel's goes bare.
+// token exchanged for a business one, as a Bearer; BigModel's and Z.ai CN's
+// are business tokens already, and go bare.
 async function bizAuth(site, token) {
-  if (site === "bigmodel") return token
+  if (site !== "zai") return token
   let biz
   try {
     biz = await call("POST", ZAI_API + "/api/auth/z/login", { body: { token } })
@@ -1444,7 +1462,7 @@ async function signedIn(site, token, jwt, device, onTeam = false) {
     }
     const t = await teamSignIn(site, root, auth, info)
     if (t.s) return { ...t.s, jwt, plan: t.plan }
-    if (t.none) throw new Error(`this ${name} account has no seat on a team's GLM Coding Plan — sign in with "ZCode: ${name} GLM Coding Plan" for its own plan`)
+    if (t.none) throw new Error(`this ${name} account has no seat on a team's GLM Coding Plan — sign in with "${wayLabel(site)}" for its own plan`)
     throw new Error(t.why ?? t.err)
   }
   try {
@@ -1509,15 +1527,18 @@ async function authorize(site, log, onTeam = false) {
   try {
     u = new URL(flow?.authorize_url)
   } catch {}
-  if (!flow?.flow_id || u?.protocol !== "https:") throw new Error("ZCode gave no sign-in page")
-  // where Z.ai or BigModel sends the browser back, as ZCode sets it (BigModel's page names it redirect)
-  const back = `${ZCODE}/app/oauth/login?` + new URLSearchParams({ redirect: "zcode://oauth/callback", app_version: APP_VERSION })
-  u.searchParams.set(site === "bigmodel" ? "redirect" : "redirect_uri", back)
+  if (!flow?.flow_id || typeof flow.authorize_url !== "string" || u?.protocol !== "https:") throw new Error("ZCode gave no sign-in page")
+  // Z.ai CN's server-provided URL already includes the flow's callback.
+  // For the other sites, set the callback as ZCode does.
+  if (site !== "zai_cn") {
+    const back = `${ZCODE}/app/oauth/login?` + new URLSearchParams({ redirect: "zcode://oauth/callback", app_version: APP_VERSION })
+    u.searchParams.set(site === "bigmodel" ? "redirect" : "redirect_uri", back)
+  }
   const interval = Math.max(Number(flow.poll_interval_sec) || 0, 1) * 1000
   const deadline = Number(flow.expires_at) > 0 ? Number(flow.expires_at) * 1000 : Date.now() + 5 * 60_000
   return {
-    url: u.toString(),
-    instructions: `Sign in to ${SITES[site].name} in the browser; this finishes on its own.`,
+    url: site === "zai_cn" ? flow.authorize_url : u.toString(),
+    instructions: `Sign in to ${SITES[site].name}${site === "zai_cn" ? " (zchat.z.ai)" : ""} in the browser; this finishes on its own.`,
     method: "auto",
     async callback() {
       const fail = (msg) => (log(msg), { type: "failed", error: msg })
@@ -1531,7 +1552,14 @@ async function authorize(site, log, onTeam = false) {
           if (e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429) return fail("ZCode sign-in: " + e.message)
           continue // a hiccup: ask again
         }
-        const token = site === "bigmodel" ? first(got.bigmodel?.access_token, got.bigmodel?.accessToken) : first(got.zai?.access_token)
+        // the sign-in's token: BigModel's answer names it bigmodel, Z.ai CN's
+        // zai_cn — or, as the token exchange does, zai — so both spellings are
+        // taken, and Z.ai's names it zai
+        const token = site === "zai_cn"
+          ? first(got.zai_cn?.access_token, got.zai_cn?.accessToken, got.zai?.access_token, got.zai?.accessToken)
+          : site === "bigmodel"
+            ? first(got.bigmodel?.access_token, got.bigmodel?.accessToken)
+            : first(got.zai?.access_token)
         if (got.status === "pending" || !got.status) continue
         if (got.status === "failed") return fail(`the sign-in was declined on ${SITES[site].name}`)
         if (got.status !== "ready" || !token) return fail("ZCode sign-in: unexpected answer " + got.status)
@@ -2935,7 +2963,8 @@ function dress(text, site, device, place, session) {
   }
   if (!b || typeof b !== "object" || !Array.isArray(b.messages)) return text
   const cached = (t) => ({ type: "text", text: t, cache_control: { type: "ephemeral" } })
-  const provider = site === "bigmodel" ? "bigmodel-api" : "zai-api"
+  // a Z.ai CN account's plan is a BigModel one, and says so
+  const provider = site === "bigmodel" || site === "zai_cn" ? "bigmodel-api" : "zai-api"
   const model = typeof b.model === "string" ? b.model : ""
   // The agent's own system text joins the third block, as ZCode's
   // ContextBuilder (3.17.2, core/src/context/builder.ts
@@ -3044,7 +3073,19 @@ export async function ZCodeAuthPlugin({ client, magpie } = {}, options = {}) {
     (providerOptions?.freeFirst !== undefined ? providerOptions.freeFirst !== false : options?.freeFirst !== false)
   const oauth = (site) => ({
     type: "oauth",
-    label: `ZCode: ${SITES[site].name}${site === "bigmodel" ? " (智谱)" : ""} GLM Coding Plan`,
+    label: wayLabel(site),
+    // the way's words by the window's language, as magpie reads them (its
+    // site page's way list takes the label alone for the site buttons)
+    ...(site === "zai_cn"
+      ? {
+          labels: {
+            zh: "ZCode：Z.ai 中国站 (zchat.z.ai) GLM Coding Plan",
+            "zh-TW": "ZCode：Z.ai 中國站 (zchat.z.ai) GLM Coding Plan",
+            ja: "ZCode：Z.ai 中国サイト (zchat.z.ai) GLM Coding Plan",
+            de: "ZCode: Z.ai China (zchat.z.ai) GLM Coding Plan",
+          },
+        }
+      : {}),
     authorize: () => authorize(site, log),
   })
   return {
@@ -3599,10 +3640,11 @@ export async function ZCodeAuthPlugin({ client, magpie } = {}, options = {}) {
               options: [
                 { label: "Z.ai", value: "zai", hint: "z.ai" },
                 { label: "BigModel (智谱)", value: "bigmodel", hint: "bigmodel.cn" },
+                { label: "Z.ai CN (zchat.z.ai)", value: "zai_cn", hint: "zchat.z.ai" },
               ],
             },
           ],
-          authorize: (inputs) => authorize(inputs?.site === "bigmodel" ? "bigmodel" : "zai", log, true),
+          authorize: (inputs) => authorize(siteOf(inputs?.site), log, true),
         },
         { type: "oauth", label: "ZCode app's sign-in", authorize: async () => asZCode() },
         {
@@ -3620,6 +3662,10 @@ export async function ZCodeAuthPlugin({ client, magpie } = {}, options = {}) {
             },
           ],
         },
+        // last, so the methods before it keep their place (OpenCode 2.x names
+        // a sign-in by its method's index): a zchat.z.ai account, whose plan
+        // is a BigModel one
+        oauth("zai_cn"),
       ],
     },
   }

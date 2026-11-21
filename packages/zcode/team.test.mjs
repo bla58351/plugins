@@ -16,19 +16,23 @@ const real = globalThis.fetch
 afterEach(() => (globalThis.fetch = real))
 
 const ok = (data) => Response.json({ code: 200, success: true, data })
+const CN_LABEL = "ZCode: ZChat (zchat.z.ai) GLM Coding Plan"
+const TEAM_LABEL = "ZCode: a team's GLM Coding Plan"
+const CN_URL = "https://ZChat.Z.AI/oauth?redirect_uri=https%3A%2F%2Fzcode.z.ai%2Fcallback&state=keep%20this"
 
-// a BigModel account with its own Pro plan in 默认项目 and a seat on team t1
-function vendor({ seat = "VALID", teams = true, user = { email: "ada@example.com" } } = {}) {
+// an account with its own BigModel Pro plan in 默认项目 and a seat on team t1
+function vendor({ seat = "VALID", teams = true, user = { email: "ada@example.com" }, authorizeURL = "https://open.bigmodel.cn/login", tokens = { bigmodel: { access_token: "bm-token" } } } = {}) {
   const seen = []
   globalThis.fetch = async (input, init = {}) => {
     const u = new URL(typeof input === "string" ? input : input.url)
     const h = new Headers(init.headers)
     const org = h.get("Bigmodel-Organization")
     const proj = h.get("Bigmodel-Project")
-    seen.push({ method: init.method ?? "GET", path: u.pathname, org, proj })
+    seen.push({ method: init.method ?? "GET", origin: u.origin, path: u.pathname, org, proj, auth: h.get("authorization"), key: h.get("x-api-key"), body: init.body })
     const p = u.pathname
-    if (p === "/api/v1/oauth/cli/init") return ok({ flow_id: "f1", authorize_url: "https://open.bigmodel.cn/login", poll_interval_sec: 0, expires_at: 0 })
-    if (p === "/api/v1/oauth/cli/poll/f1") return ok({ status: "ready", bigmodel: { access_token: "bm-token" }, token: "", user })
+    if (p === "/api/v1/oauth/cli/init") return ok({ flow_id: "f1", authorize_url: authorizeURL, poll_interval_sec: 0, expires_at: 0 })
+    if (p === "/api/v1/oauth/cli/poll/f1") return ok({ status: "ready", ...tokens, token: "", user })
+    if (p === "/api/anthropic/v1/messages") return ok({ type: "message", content: [] })
     if (p === "/api/biz/customer/getCustomerInfo")
       return ok({
         organizations: [
@@ -101,9 +105,45 @@ test("the team sign-in with no seat says so, and never falls back to the account
 
 test("the team sign-in asks which site, as the key sign-in does", async () => {
   const hooks = await ZCodeAuthPlugin({ client: { auth: { set: async () => {} } } })
-  const m = hooks.auth.methods.find((x) => x.label === "ZCode: a team's GLM Coding Plan")
+  const m = hooks.auth.methods.find((x) => x.label === TEAM_LABEL)
   expect(m.type).toBe("oauth")
-  expect(m.prompts.map((p) => [p.key, p.type, p.options.map((o) => o.value)])).toEqual([["site", "select", ["zai", "bigmodel"]]])
+  expect(m.prompts.map((p) => [p.key, p.type, p.options.map((o) => o.value)])).toEqual([["site", "select", ["zai", "bigmodel", "zai_cn"]]])
+})
+
+test("Z.ai CN keeps the server's browser URL and uses its own token and BigModel plan", async () => {
+  const seen = vendor({ authorizeURL: CN_URL, tokens: { zai_cn: { accessToken: "cn-token" }, zai: { access_token: "international-token" } } })
+  const { auth } = await ZCodeAuthPlugin()
+  expect(auth.methods.map((m) => m.label)).toEqual([
+    "ZCode: Z.ai GLM Coding Plan",
+    "ZCode: BigModel (智谱) GLM Coding Plan",
+    TEAM_LABEL,
+    "ZCode app's sign-in",
+    "GLM Coding Plan API key",
+    CN_LABEL,
+  ])
+  const flow = await auth.methods.at(-1).authorize()
+  expect(flow.url).toBe(CN_URL)
+  expect(JSON.parse(seen[0].body)).toEqual({ provider: "zai_cn" })
+  const signedIn = await flow.callback()
+  expect(signedIn).toMatchObject({ type: "success", access: "own.own-secret" })
+  expect(JSON.parse(signedIn.refresh)).toMatchObject({ site: "zai_cn", base: "https://open.bigmodel.cn/api/anthropic", key: "own.own-secret" })
+  expect(seen.find((r) => r.path === "/api/biz/customer/getCustomerInfo")).toMatchObject({ origin: "https://bigmodel.cn", auth: "cn-token" })
+  expect(seen.some((r) => r.path === "/api/auth/z/login")).toBe(false)
+
+  const opts = await auth.loader(async () => ({ ...signedIn, type: "oauth" }), { id: "zcode" })
+  expect(opts.baseURL).toBe("https://open.bigmodel.cn/api/anthropic/v1")
+  const response = await opts.fetch("https://api.z.ai/api/anthropic/v1/messages", { method: "POST", body: "{}" })
+  expect(response.status).toBe(200)
+  expect(seen.at(-1)).toMatchObject({ origin: "https://open.bigmodel.cn", path: "/api/anthropic/v1/messages", key: "own.own-secret" })
+})
+
+test("a Z.ai CN team sign-in accepts the poll's zai token and keeps the BigModel team scope", async () => {
+  const seen = vendor({ authorizeURL: CN_URL, tokens: { zai: { access_token: "cn-team-token" } } })
+  const signedIn = await signIn(TEAM_LABEL, { site: "zai_cn" })
+  expect(signedIn).toMatchObject({ type: "success", accountId: "ada@example.com (team)", access: "tk.team-secret" })
+  expect(JSON.parse(signedIn.refresh)).toMatchObject({ site: "zai_cn", token: "cn-team-token", org: "t1", project: "tp1" })
+  expect(seen.find((r) => r.path.endsWith("querySubscribeDetail"))).toMatchObject({ origin: "https://bigmodel.cn", auth: "cn-team-token", org: "t1", proj: "tp1" })
+  expect(seen.some((r) => r.path.includes("own-org"))).toBe(false)
 })
 
 // wakkana on Discord (WorkBuddy's, the same here): the browser sign-in
